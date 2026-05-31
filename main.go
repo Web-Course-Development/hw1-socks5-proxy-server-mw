@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"io"
+	"os"
 )
+
 
 func main() {
 	port := flag.Int("port", 1080, "port to listen on")
@@ -28,15 +31,105 @@ func main() {
 		go handleConnection(conn)
 	}
 }
-
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 
-	// TODO: Implement SOCKS5 protocol
-	// 1. Read client greeting and negotiate authentication method
-	// 2. Perform authentication if required (when PROXY_USER env var is set)
-	// 3. Read CONNECT request
-	// 4. Connect to target server
-	// 5. Send success/error reply
-	// 6. Relay data between client and target
+	buf := make([]byte, 262)
+    n, err := conn.Read(buf)
+    if err != nil || n < 2 {
+	    return
+    }
+    
+    user := os.Getenv("PROXY_USER")
+pass := os.Getenv("PROXY_PASS")
+needAuth := user != ""
+
+methodsCount := int(buf[1])
+
+supported := false
+selectedMethod := byte(0xFF)
+
+for i := 0; i < methodsCount; i++ {
+	if needAuth && buf[2+i] == 0x02 {
+		supported = true
+		selectedMethod = 0x02
+		break
+	}
+	if !needAuth && buf[2+i] == 0x00 {
+		supported = true
+		selectedMethod = 0x00
+		break
+	}
+}
+
+if !supported {
+	conn.Write([]byte{0x05, 0xFF})
+	return
+}
+
+conn.Write([]byte{0x05, selectedMethod})
+
+if needAuth {
+	n, err = conn.Read(buf)
+	if err != nil || n < 3 {
+		return
+	}
+
+	ulen := int(buf[1])
+	username := string(buf[2 : 2+ulen])
+
+	plenIndex := 2 + ulen
+	plen := int(buf[plenIndex])
+	password := string(buf[plenIndex+1 : plenIndex+1+plen])
+
+	if username != user || password != pass {
+		conn.Write([]byte{0x01, 0x01})
+		return
+	}
+
+	conn.Write([]byte{0x01, 0x00})
+}
+ 
+	n, err = conn.Read(buf)
+	if err != nil || n < 7 {
+		return
+	}
+
+	// لازم يكون CONNECT
+	if buf[1] != 0x01 {
+		conn.Write([]byte{0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		return
+	}
+
+	atyp := buf[3]
+	pos := 4
+	var host string
+
+	if atyp == 0x01 { // IPv4
+		host = net.IP(buf[pos : pos+4]).String()
+		pos += 4
+	} else if atyp == 0x03 { // Domain
+		length := int(buf[pos])
+		pos++
+		host = string(buf[pos : pos+length])
+		pos += length
+	} else {
+		conn.Write([]byte{0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		return
+	}
+
+	port := int(buf[pos])<<8 | int(buf[pos+1])
+	targetAddress := fmt.Sprintf("%s:%d", host, port)
+
+	target, err := net.Dial("tcp", targetAddress)
+	if err != nil {
+		conn.Write([]byte{0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		return
+	}
+	defer target.Close()
+
+	conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+
+	go io.Copy(target, conn)
+	io.Copy(conn, target)
 }
