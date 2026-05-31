@@ -7,6 +7,7 @@ import (
 	"net"
 	"io"
 	"os"
+	"encoding/binary"
 )
 
 
@@ -118,8 +119,8 @@ if needAuth {
 		return
 	}
 
-	port := int(buf[pos])<<8 | int(buf[pos+1])
-	targetAddress := fmt.Sprintf("%s:%d", host, port)
+    port := int(binary.BigEndian.Uint16(buf[pos : pos+2]))
+    targetAddress := fmt.Sprintf("%s:%d", host, port)
 
 	target, err := net.Dial("tcp", targetAddress)
 	if err != nil {
@@ -130,6 +131,15 @@ if needAuth {
 
 	conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 
-	go io.Copy(target, conn)
-	io.Copy(conn, target)
+	go func() {
+	io.Copy(target, conn)
+	if tcp, ok := target.(*net.TCPConn); ok {
+		tcp.CloseWrite()
+	}
+}()
+
+io.Copy(conn, target)
+if tcp, ok := conn.(*net.TCPConn); ok {
+	tcp.CloseWrite()
+}
 }
