@@ -124,6 +124,7 @@ if needAuth {
 
 	target, err := net.Dial("tcp", targetAddress)
 	if err != nil {
+		
 		conn.Write([]byte{0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		return
 	}
